@@ -1,0 +1,403 @@
+# 财务数据处理配置文件
+# 用于指导AI精准执行银行账单/支付记录整理任务
+
+# 任务元信息
+task_info:
+  name: "财务数据整合处理"
+  version: "2.0"
+  description: "分阶段处理财务数据：先清理表头，再整合数据"
+  objective: "第一阶段清理原始表格，第二阶段整合消费记录"
+
+# 处理阶段定义
+processing_stages:
+  stage1_data_cleaning:
+    name: "原始数据清理阶段"
+    description: "清理招行和微信原始CSV文件的表头和无关信息"
+    
+    bank_csv_cleaning:
+      source_description: "招行信用卡账单CSV（PDF转换而来）"
+      common_issues:
+        - "多层表头说明文字"
+        - "底部统计和说明行"
+        - "空列和格式干扰"
+        - "混合数据格式"
+      cleaning_rules:
+        - "删除表头说明行（通常前3-5行）"
+        - "删除底部汇总和说明行"
+        - "移除空列和无效列"
+        - "提取核心交易记录行"
+        - "标准化列名为：交易日期,商户名称,交易金额,卡号"
+      exclude_transactions:
+        - "还款"
+        - "分期还款"
+        - "利息"
+        - "年费"
+      expected_output: "招行纯消费记录.csv"
+    
+    wechat_csv_cleaning:
+      source_description: "微信支付账单CSV（官方导出）"
+      common_issues:
+        - "表头说明行干扰"
+        - "交易类型混合（包含非消费）"
+        - "导出信息行"
+        - "列名不标准"
+      cleaning_rules:
+        - "删除微信账单表头行（如：微信支付账单明细列表）"
+        - "删除导出信息行（如：起始时间、终止时间）"
+        - "删除底部统计行（如：共XX笔记录）"
+        - "标准化列名为：交易时间,商户名称,交易金额,支付方式"
+      exclude_transactions:
+        - "转账备注"
+        - "红包"
+        - "收入类交易"
+        - "提现"
+        - "充值"
+      expected_output: "微信纯消费记录.csv"
+  
+  stage2_data_integration:
+    name: "数据整合阶段"
+    description: "将清理后的两个文件整合为完整消费记录"
+    inputs:
+      - "招行纯消费记录.csv"
+      - "微信纯消费记录.csv"
+    
+    integration_rules:
+      time_handling:
+        wechat_data: "保持原始精确时间戳（YYYY-MM-DD HH:mm:ss）"
+        bank_data: "仅保留日期格式（YYYY-MM-DD）"
+        critical_rule: "绝对禁止为银行数据添加虚假时间"
+      
+      duplicate_detection:
+        match_criteria: ["日期", "金额", "商户关键词"]
+        resolution: "优先保留微信数据（时间更精确）"
+      
+      source_marking:
+        wechat_records: "数据来源标记为'微信账单'"
+        bank_records: "数据来源标记为'招行账单'"
+    
+    expected_output: "完整消费记录.csv"
+
+# 执行模式
+execution_modes:
+  staged_processing:
+    recommended: true
+    description: "分阶段处理，每阶段可独立验证"
+    
+    stage1_command: "请按照配置文件stage1_data_cleaning规则，清理原始数据文件的表头和无关信息"
+    stage1_validation: "检查生成的纯消费记录文件是否格式正确、无表头干扰"
+    
+    stage2_command: "请按照配置文件stage2_data_integration规则，整合已清理的消费记录文件"
+    stage2_validation: "检查最终文件是否符合时间精度、来源标记等要求"
+  
+  single_step:
+    recommended: false
+    description: "一次性处理（不推荐，错误率高）"
+    risk_warning: "表头清理和数据整合一起执行容易出错"
+
+# 数据源定义
+data_sources:
+  wechat_pay:
+    description: "微信支付账单"
+    file_pattern: "微信支付账单*.csv"
+    encoding: "utf-8"
+    time_format: "YYYY-MM-DD HH:mm:ss"
+    time_precision: "exact_timestamp"  # 精确时间戳
+    key_columns:
+      datetime: "交易时间"
+      merchant: "交易对方"
+      amount: "金额"
+      payment_method: "支付方式"
+    exclusions:
+      keywords: ["转账备注", "红包", "/"]
+      transaction_types: ["转账", "红包收入", "红包支出", "提现"]
+  
+  bank_statement:
+    description: "银行信用卡账单"
+    file_pattern: "*信用卡账单*.csv"
+    encoding: "utf-8"
+    time_format: "YYYY-MM-DD"
+    time_precision: "date_only"  # 仅日期
+    key_columns:
+      date: "交易日期"
+      merchant: "交易描述"
+      amount: "交易金额"
+      card_number: "卡号后四位"
+    exclusions:
+      transaction_types: ["还款", "分期还款", "利息", "费用"]
+      keywords: ["还款", "分期", "利息收入"]
+
+# 数据处理规则
+processing_rules:
+  # 清理规则
+  cleanup:
+    remove_headers:
+      - "微信支付账单明细列表"
+      - "起始时间"
+      - "终止时间"
+      - "导出类型"
+    remove_footers:
+      - pattern: "共.*笔记录"
+      - pattern: "注：已隐藏.*"
+      - "导出时间"
+  
+  # 交易筛选
+  transaction_filter:
+    include_types:
+      - "消费"
+      - "支付"
+      - "购物"
+      - "餐饮"
+      - "交通"
+      - "医疗"
+      - "教育"
+      - "娱乐"
+      - "服务"
+      - "数字服务"
+    exclude_types:
+      - "还款"
+      - "分期还款"
+      - "转账"
+      - "红包"
+      - "提现"
+      - "充值"
+      - "退款"
+      - "利息"
+      - "费用"
+  
+  # 时间处理 (关键规则)
+  time_handling:
+    preserve_original_precision: true
+    rules:
+      - source_type: "wechat_pay"
+        action: "keep_exact_format"
+        format: "YYYY-MM-DD HH:mm:ss"
+        note: "保持微信原始精确时间戳"
+      - source_type: "bank_statement"
+        action: "date_only"
+        format: "YYYY-MM-DD"
+        note: "银行数据仅保留日期，不添加时间"
+        forbidden: "不允许添加 00:00:00 等虚假时间"
+  
+  # 重复检测
+  duplicate_detection:
+    match_criteria:
+      - "日期"
+      - "金额" 
+      - "商户关键词"
+    tolerance:
+      amount: 0.01
+      time: "1天内"
+    resolution_priority:
+      1: "时间精确度高的数据源"
+      2: "信息完整度高的记录"
+  
+  # 商户名称处理
+  merchant_processing:
+    simplify: true
+    remove_suffixes:
+      - "有限公司"
+      - "股份有限公司" 
+      - "分公司"
+      - "（.*）"
+    standardize_names:
+      "luckin coffee": ["瑞幸咖啡", "luckin"]
+      "肯德基": ["KFC", "肯德基宅急送"]
+
+# 分类规则
+categorization:
+  categories:
+    食物:
+      keywords: 
+        - "餐厅"
+        - "咖啡"
+        - "奶茶"
+        - "外卖"
+        - "超市"
+        - "生鲜"
+        - "塔斯汀"
+        - "肯德基"
+        - "元元"
+        - "luckin"
+        - "蜜雪冰城"
+        - "书亦"
+    日用品:
+      keywords:
+        - "超市"
+        - "便利店"
+        - "颜勇商店"
+        - "民润便利"
+        - "新佳宜"
+        - "优尔惠"
+    交通:
+      keywords:
+        - "加油"
+        - "中国石化"
+        - "出租车"
+        - "滴滴"
+        - "高德打车"
+        - "停车"
+    医疗:
+      keywords:
+        - "医院"
+        - "药店"
+        - "口腔"
+        - "诊所"
+        - "体检"
+    数字服务:
+      keywords:
+        - "GOOGLE"
+        - "GITHUB"
+        - "PAYPAL"
+        - "云服务"
+        - "CLOUD"
+        - "月之暗面"
+        - "顺易通"
+    通讯:
+      keywords:
+        - "中国移动"
+        - "中国电信"
+        - "中国联通"
+        - "话费"
+    公用事业:
+      keywords:
+        - "电费"
+        - "水费"
+        - "燃气费"
+        - "公共事业缴费"
+    教育:
+      keywords:
+        - "书店"
+        - "培训"
+        - "学费"
+        - "教材"
+        - "新华书店"
+    娱乐:
+      keywords:
+        - "游戏"
+        - "Steam"
+        - "Valve"
+        - "电影"
+        - "KTV"
+    税务:
+      keywords:
+        - "税务"
+        - "国家税务总局"
+    运动:
+      keywords:
+        - "游泳"
+        - "健身"
+        - "体育"
+        - "飞渔"
+    服务:
+      keywords:
+        - "照相"
+        - "维修"
+        - "便民服务"
+
+# 输出规范
+output_specification:
+  filename: "完整消费记录.csv"
+  encoding: "utf-8-sig"  # Excel兼容
+  columns:
+    - name: "交易时间"
+      description: "原始时间格式，微信精确到秒，银行仅日期"
+      required: true
+    - name: "商户名称"
+      description: "消费商家或服务提供商"
+      required: true
+    - name: "金额"
+      description: "消费金额，保留2位小数"
+      format: "numeric"
+      required: true
+    - name: "支付方式"
+      description: "支付工具，标准化表示"
+      required: true
+    - name: "消费类型"
+      description: "自动分类结果"
+      required: true
+    - name: "数据来源"
+      description: "数据来源标识"
+      values: ["微信账单", "招行账单"]
+      required: true
+  
+  sorting:
+    primary: "交易时间"
+    order: "desc"  # 最新记录在前
+  
+  formatting:
+    amount_decimal: 2
+    date_consistent: false  # 不强制统一日期格式
+    remove_empty_rows: true
+
+# 质量保证规则
+quality_assurance:
+  mandatory_checks:
+    - name: "时间格式检查"
+      description: "微信数据包含时分秒，银行数据仅日期"
+      critical: true
+    - name: "虚假时间检测"
+      description: "银行数据不应出现00:00:00等时间"
+      critical: true
+    - name: "非消费记录检测"
+      description: "确保无还款、转账等记录"
+      critical: true
+    - name: "数据来源标记"
+      description: "每条记录都有明确来源"
+      critical: true
+    - name: "消费分类覆盖"
+      description: "所有记录都有合理分类"
+      critical: false
+  
+  warning_thresholds:
+    large_amount: 5000.0
+    frequent_merchant_daily: 5
+    suspicious_time_pattern: "同一时间多笔交易"
+  
+  validation_reports:
+    - "处理记录统计"
+    - "数据来源分布" 
+    - "消费类型分布"
+    - "时间跨度覆盖"
+    - "质量检查结果"
+
+# 执行流程控制
+execution_workflow:
+  steps:
+    1: "读取配置文件"
+    2: "识别数据源文件"
+    3: "执行数据清理"
+    4: "应用交易筛选"
+    5: "处理时间格式"
+    6: "检测重复记录"
+    7: "执行数据合并"
+    8: "应用分类规则"
+    9: "质量验证检查"
+    10: "生成输出文件"
+    11: "生成处理报告"
+    12: "清理临时文件"
+  
+  error_handling:
+    file_not_found: "提示用户确认文件路径和名称"
+    encoding_error: "尝试GBK、UTF-8-BOM等编码"
+    parse_error: "记录错误行号，跳过并继续"
+    validation_failure: "生成错误报告，要求人工检查"
+  
+  success_criteria:
+    - "生成完整消费记录.csv文件"
+    - "通过所有关键质量检查"
+    - "处理记录数量在合理范围"
+    - "时间跨度覆盖所有源文件"
+    - "无中间临时文件残留"
+
+# 用户自定义设置
+user_preferences:
+  time_display:
+    wechat_precision: "keep_original"  # 保持原始精度
+    bank_precision: "date_only"       # 仅日期
+  
+  merchant_simplification: true
+  auto_categorization: true
+  duplicate_auto_resolve: true
+  
+  cleanup_temp_files: true
+  generate_summary_report: true
