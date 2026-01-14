@@ -1,0 +1,23 @@
+graph TD
+    Start(开始) --> UploadHistory[1. 用户上传历史账本]
+    UploadHistory --> AI_Analyze_Structure[2. AI 分析账本结构]
+    
+    AI_Analyze_Structure --> Check_Model{符合标准模型?}
+    
+    Check_Model -- 完全匹配 --> Show_Dashboard[展示账本概览]
+    Check_Model -- 不匹配 --> Map_Columns[3. AI 引导字段映射<br/>(不修改原文件，建立读取规则)]
+    Map_Columns --> Show_Dashboard
+    
+    Show_Dashboard --> Ask_Merge{4. 是否合并其他账本?<br/>(微信/支付宝/银行)}
+    
+    Ask_Merge -- 否 --> Finish_Setup(5. 完成设置<br/>进入日常记账模式)
+    
+    Ask_Merge -- 是 --> Upload_New[6. 上传新账单源]
+    Upload_New --> Clean_New[数据清洗<br/>(去除红包/转账/格式化)]
+    
+    Clean_New --> AI_Category_Map[AI 分类对齐<br/>(将新账单分类映射到历史习惯)]
+    AI_Category_Map --> Deduplicate[智能去重<br/>(比对历史数据剔除重复)]
+    
+    Deduplicate --> Review_Merge[用户预览合并结果]
+    Review_Merge --> Commit_Merge[确认合并]
+    Commit_Merge --> Finish_Setup
